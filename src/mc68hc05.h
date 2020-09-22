@@ -82,6 +82,7 @@ struct mc68hc05 {
     uint64_t ticks = 0;
 
     bool log_io = true;
+    bool trace = true;
 
     // Debug
     char __ADDR[64] = {0};
@@ -115,11 +116,13 @@ struct mc68hc05 {
     }
 
     uint16_t pop16() {
-        uint16_t value = read8(++SP) << 8;
+        uint16_t value = 0;
+        value |= read8(++SP) << 8;
         value |= read8(++SP);
-
         return value;
     }
+
+    void irq(uint16_t vector);
 
 private:
     void op_brbitset(uint8_t addr, uint8_t bit, int8_t i);

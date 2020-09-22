@@ -4,7 +4,7 @@
 
 uint8_t mc68hc05::read8(uint16_t address) {
     if (address >= ROM_BASE && address < ROM_BASE + ROM_SIZE) return rom[address - ROM_BASE];
-    else if (address >= BOOTSRAP_BASE && address < BOOTSRAP_BASE + BOOTSRAP_SIZE)
+    else if (address >= BOOTSRAP_BASE && address <= BOOTSRAP_BASE + BOOTSRAP_SIZE - 1)
         return bootstrap[address - BOOTSRAP_BASE];
     else if (address >= RAM_BASE && address < RAM_BASE + ROM_SIZE) return ram[address - RAM_BASE];
 
@@ -27,7 +27,7 @@ uint8_t mc68hc05::read8(uint16_t address) {
         switch (address) {
             case 0x1d:
                 return TSR2;
-            case 0x3e: // MISC
+            case 0x3e:
                 return MISC;
 
             default:
@@ -154,7 +154,7 @@ void mc68hc05::write8(uint16_t address, uint8_t data) {
             case 0x20:
                 LCDCR = data;
                 return;
-            case 0x3e: // MISC
+            case 0x3e:
                 MISC &= 0b11000000;
                 MISC |= data & 0b00111111;
                 return;
@@ -186,16 +186,16 @@ std::string parseFlags(mc68hc05::ccr_t CCR) {
 #define ADDR_CLEAR() __ADDR[0] = 0
 #define ADDR(format, ...) sprintf(__ADDR, format, __VA_ARGS__)
 #define TRACE(op) do { \
-    fprintf(stdout, "mc68hc05: PC=%04x, A=%02x, X=%02x, SP=%02x, CCR=%s  tick=%-5d    %02x    %s %s\n", currentPC, A, X, SP, parseFlags(CCR).c_str(), ticks++, read8(currentPC), op, __ADDR); \
+    if (trace) fprintf(stdout, "mc68hc05: PC=%04x, A=%02x, X=%02x, SP=%02x, CCR=%s  tick=%-5llu    %02x    %s %s\n", currentPC, A, X, SP, parseFlags(CCR).c_str(), ticks++, read8(currentPC), op, __ADDR); \
 } while(0)
 
 #define TRACE_RAW(format, ...) do { \
-    fprintf(stdout, "mc68hc05: PC=%04x, A=%02x, X=%02x, SP=%02x, CCR=%s  tick=%-5d    %02x    " format "\n", currentPC, A, X, SP, parseFlags(CCR).c_str(), ticks++, read8(currentPC), __VA_ARGS__); \
+    if (trace) fprintf(stdout, "mc68hc05: PC=%04x, A=%02x, X=%02x, SP=%02x, CCR=%s  tick=%-5llu    %02x    " format "\n", currentPC, A, X, SP, parseFlags(CCR).c_str(), ticks++, read8(currentPC), __VA_ARGS__); \
 } while(0)
 
 #define HALT(op) do { \
     running = false; \
-    fprintf(stdout, "mc68hc05: PC=%04x, A=%02x, X=%02x, SP=%02x, CCR=%s  tick=%-5d    %02x    Unknown opcode (%s)\n", currentPC, A, X, SP, parseFlags(CCR).c_str(), ticks++, read8(currentPC), op); \
+    fprintf(stdout, "mc68hc05: PC=%04x, A=%02x, X=%02x, SP=%02x, CCR=%s  tick=%-5llu    %02x    Unknown opcode (%s)\n", currentPC, A, X, SP, parseFlags(CCR).c_str(), ticks++, read8(currentPC), op); \
     return false;     \
 } while(0)
 
@@ -215,7 +215,6 @@ bool mc68hc05::step() {
             if (lo % 2 == 0) op_brbitset(addr, lo >> 1, dst);
             else op_brbitclr(addr, lo >> 1, dst);
             return true;
-            break;
         }
 
         case 1: { // Bit set/clear
@@ -230,7 +229,6 @@ bool mc68hc05::step() {
             int8_t dst = read8(PC++);
             if (op_branch(lo, dst)) return true;
             HALT("Branch");
-            break;
         }
 
             // Read/modify/write
@@ -241,7 +239,6 @@ bool mc68hc05::step() {
             if (op_rmw(lo)) return true;
 
             HALT("Read/modify/write direct");
-            break;
         case 4: // A
             vaddr = -1;
             ADDR("%c", 'A');
@@ -249,27 +246,22 @@ bool mc68hc05::step() {
             if (op_rmw(lo)) return true;
 
             HALT("Read/modify/write Inherent A");
-            break;
         case 5: // X
             ADDR("%c", 'X');
             vaddr = -2;
             if (op_rmw(lo)) return true;
 
             HALT("Read/modify/write Inherent X");
-            break;
         case 6: // Indexed 8 bit
             HALT("Read/modify/write Indexed 8 bit");
-            break;
         case 7: // Indexed (no offset)
             HALT("Read/modify/write Indexed (no offset)");
-            break;
 
             // Control
         case 8: // Inherent
         case 9: // Inherent
             if (op_control(opcode)) return true;
             HALT("Control");
-            break;
 
             // Register/memory
         case 10: { // Immediate
@@ -288,7 +280,6 @@ bool mc68hc05::step() {
             if (op_memory(lo)) return true;
 
             HALT("Register/memory Immediate");
-            break;
         }
         case 11: {// Direct
             vaddr = read8(PC++);
@@ -296,7 +287,6 @@ bool mc68hc05::step() {
             if (op_memory(lo)) return true;
 
             HALT("Register/memory Direct");
-            break;
         }
         case 12: {// Extended
             vaddr = read16(PC);
@@ -307,7 +297,6 @@ bool mc68hc05::step() {
             if (op_memory(lo)) return true;
 
             HALT("Register/memory Extended");
-            break;
         }
         case 13: {// Indexed 16 bit
             uint16_t index = read16(PC);
@@ -317,7 +306,6 @@ bool mc68hc05::step() {
 
             if (op_memory(lo)) return true;
             HALT("Register/memory Indexed 16 bit");
-            break;
         }
         case 14: {// Indexed 8 bit
             uint8_t index = read8(PC++);
@@ -327,7 +315,6 @@ bool mc68hc05::step() {
             if (op_memory(lo)) return true;
 
             HALT("Register/memory Indexed 8 bit");
-            break;
         }
         case 15: // Indexed (no offset) (X)
             vaddr = X;
@@ -335,7 +322,6 @@ bool mc68hc05::step() {
             if (op_memory(lo)) return true;
 
             HALT("Register/memory Indexed (no offset)");
-            break;
     }
 
     return false;
@@ -356,7 +342,7 @@ void mc68hc05::op_bitclr(uint8_t addr, uint8_t bit) {
 }
 
 void mc68hc05::op_brbitset(uint8_t addr, uint8_t bit, int8_t dst) {
-    TRACE_RAW("BRSET $%02x.%d, %d", addr, bit, dst);
+    TRACE_RAW("BRSET%d $%02x, %d", bit, addr, dst);
 
     CCR.carry = (read8(addr) & (1 << bit)) != 0;
     if (CCR.carry == 1) {
@@ -365,7 +351,7 @@ void mc68hc05::op_brbitset(uint8_t addr, uint8_t bit, int8_t dst) {
 }
 
 void mc68hc05::op_brbitclr(uint8_t addr, uint8_t bit, int8_t dst) {
-    TRACE_RAW("BRCLR $%02x.%d, %d", addr, bit, dst);
+    TRACE_RAW("BRCLR%d $%02x, %d", bit, addr, dst);
     CCR.carry = (read8(addr) & (1 << bit)) != 0;
     if (CCR.carry == 0) {
         PC += dst;
@@ -504,14 +490,14 @@ bool mc68hc05::op_memory(uint8_t op) {
             CCR.carry = value < 0;
             return true;
         }
-        case 0x6: // LDA
+        case 0x6:
             TRACE("LDA");
             A = readv();
             CCR.negative = (A & 0x80) != 0;
             CCR.zero = A == 0;
             return true;
 
-        case 0x7: // STA
+        case 0x7:
             TRACE("STA");
             writev(A);
 
@@ -551,7 +537,7 @@ bool mc68hc05::op_memory(uint8_t op) {
             PC = getv();
             return true;
 
-        case 0xd: //JSR
+        case 0xd:
             TRACE("JSR");
             push16(PC);
             PC = getv();
@@ -593,6 +579,15 @@ void mc68hc05::writev(uint8_t data) {
     if (vaddr == -1) A = data;
     else if (vaddr == -2) X = data;
     else write8(vaddr, data);
+}
+
+void mc68hc05::irq(uint16_t vector) {
+    push16(PC);
+    push8(X);
+    push8(A);
+    push8(CCR.reg);
+    CCR.interrupt_mask = 1;
+    PC = read16(vector);
 }
 
 

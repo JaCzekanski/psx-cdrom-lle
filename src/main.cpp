@@ -162,21 +162,10 @@ int main() {
             // 0xfff8 - KWI - unused
             // 0xfffa - External interrupt /IRQ1 /IRQ2 - unused
             // 0xfffc - SWI - unused
-            auto IRQ = [&subcpu](uint16_t vector) {
-                subcpu.push16(subcpu.PC);
-                subcpu.push8(subcpu.X);
-                subcpu.push8(subcpu.A);
-                subcpu.push8(subcpu.CCR.reg);
-                subcpu.CCR.interrupt_mask = 1;
-                subcpu.PC = subcpu.read16(vector);
-                printf("IRQ 0x%04x\n", vector);
-            };
-            IRQ(0xfff4);
+
+            subcpu.irq(0xfff4);
+            printf("IRQ 0x%04x\n", 0xfff4);
         }
-//        if (subcpu.PC == subcpu.currentPC) {
-//            printf("CPU infinite loop\n");
-//            break;
-//        }
     }
 //    dumpIo(&subcpu);
     return 0;
