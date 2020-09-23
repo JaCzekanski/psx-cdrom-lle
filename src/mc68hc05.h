@@ -81,7 +81,7 @@ struct mc68hc05 {
     uint16_t currentPC = 0;
     uint64_t ticks = 0;
 
-    bool log_io = true;
+    bool log_io = false;
     bool trace = true;
 
     // Debug
@@ -96,7 +96,7 @@ struct mc68hc05 {
         PC = read16(0xfffe);
     }
 
-    uint8_t read8(uint16_t address);
+    uint8_t read8(uint16_t address, bool peek = false);
     uint16_t read16(uint16_t address);
 
     void write8(uint16_t address, uint8_t data);
@@ -124,6 +124,9 @@ struct mc68hc05 {
 
     void irq(uint16_t vector);
 
+    void onPortRead(int port);
+    void onPortWrite(int port, uint8_t data);
+
 private:
     void op_brbitset(uint8_t addr, uint8_t bit, int8_t i);
     void op_brbitclr(uint8_t addr, uint8_t bit, int8_t i);
@@ -133,7 +136,7 @@ private:
     bool op_control(uint8_t opcode);
     bool op_memory(uint8_t op);
     bool op_rmw(uint8_t op);
-    bool op_branch(uint8_t op, int8_t dst);
+    bool op_branch(uint8_t op, uint16_t dst);
 
     // Addressing helpers
     uint16_t getv() const;

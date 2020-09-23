@@ -57,7 +57,8 @@ bool loadSrec(const char *path, mc68hc05 *cpu) {
                     uint16_t ptr = address + i;
                     if (ptr >= mc68hc05::ROM_BASE && ptr < mc68hc05::ROM_BASE + mc68hc05::ROM_SIZE) {
                         cpu->rom[ptr - mc68hc05::ROM_BASE] = byte;
-                    } else if (address >= mc68hc05::BOOTSRAP_BASE && address < mc68hc05::BOOTSRAP_BASE + mc68hc05::BOOTSRAP_SIZE) {
+                    } else if (address >= mc68hc05::BOOTSRAP_BASE &&
+                               address <= mc68hc05::BOOTSRAP_BASE + mc68hc05::BOOTSRAP_SIZE - 1) {
                         cpu->bootstrap[ptr - mc68hc05::BOOTSRAP_BASE] = byte;
                     } else {
                         fprintf(stderr, "srec - unmapped address space at 0x%04x (line %d), breaking.\n", ptr,
@@ -90,7 +91,7 @@ bool loadSrec(const char *path, mc68hc05 *cpu) {
     return true;
 }
 
-void dumpIo(mc68hc05* cpu) {
+void dumpIo(mc68hc05 *cpu) {
 #define D(reg) printf("%-6s: 0x%02x\n", #reg, cpu->reg)
 
     D(PORTA);
@@ -137,7 +138,7 @@ int main() {
     }
 
     subcpu.reset();
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 1000000; i++) {
         if (!subcpu.step()) break;
         if (!subcpu.running) break;
 
@@ -164,7 +165,7 @@ int main() {
             // 0xfffc - SWI - unused
 
             subcpu.irq(0xfff4);
-            printf("IRQ 0x%04x\n", 0xfff4);
+//            printf("IRQ 0x%04x\n", 0xfff4);
         }
     }
 //    dumpIo(&subcpu);

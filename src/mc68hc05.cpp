@@ -2,16 +2,28 @@
 #include <cstdio>
 #include <string>
 
-uint8_t mc68hc05::read8(uint16_t address) {
+uint8_t mc68hc05::read8(uint16_t address, bool peek) {
     if (address >= ROM_BASE && address < ROM_BASE + ROM_SIZE) return rom[address - ROM_BASE];
     else if (address >= BOOTSRAP_BASE && address <= BOOTSRAP_BASE + BOOTSRAP_SIZE - 1)
         return bootstrap[address - BOOTSRAP_BASE];
     else if (address >= RAM_BASE && address < RAM_BASE + ROM_SIZE) return ram[address - RAM_BASE];
 
     if (address < 0x10) {
-        if (log_io) printf("mc68hc05: read  @ %d:0x%02x\n", MISC & 1, address);
+        if (log_io && !peek) printf("mc68hc05: read  @ %d:0x%02x\n", MISC & 1, address);
 
+        if (address >= 0 && address <= 5 && !peek) {
+            onPortRead(address);
+        }
+        if (address == 9 && !peek) {
+            printf("mc68hc05: read  INTSR = 0x%02x\n", INTSR);
+        }
         switch (address) {
+            case 0x00:
+                return PORTA;
+            case 0x01:
+                return PORTB;
+            case 0x02:
+                return PORTC;
             case 0x03:
                 return PORTD;
             case 0x04:
@@ -23,7 +35,7 @@ uint8_t mc68hc05::read8(uint16_t address) {
         }
         fprintf(stderr, "mc68hc05: Read from unmapped banked IO address %d:0x%02x\n", MISC & 1, address);
     } else {
-        if (log_io) printf("mc68hc05: read  @ 0x%04x\n", address);
+        if (log_io && !peek) printf("mc68hc05: read  @ 0x%04x\n", address);
         switch (address) {
             case 0x1d:
                 return TSR2;
@@ -54,8 +66,13 @@ void mc68hc05::write8(uint16_t address, uint8_t data) {
     }
 
     if (address < 0x10) {
-        if (log_io) printf("mc68hc05: write @ %d:0x%02x: 0x%02x\n", MISC & 1, address, data);
+        if (log_io) {
+            printf("mc68hc05: write @ %d:0x%02x: 0x%02x\n", MISC & 1, address, data);
+        }
         if ((MISC & 1) == 0) {
+            if (address >= 0 && address <= 5) {
+                onPortWrite(address, data); // TODO: Write first, then call
+            }
             switch (address) {
                 case 0x00:
                     PORTA = data;
@@ -78,10 +95,10 @@ void mc68hc05::write8(uint16_t address, uint8_t data) {
                 case 0x08:
                     INTCR = data;
                     return;
-                case 0x09:
-                    if (data & (1<<0)) INTSR &= ~(1<<4); // Reset Key Wakeup Interrupt Flag
-                    if (data & (1<<2)) INTSR &= ~(1<<6); // Reset IRQ2 flag
-                    if (data & (1<<3)) INTSR &= ~(1<<7); // Reset IRQ1 flag
+                case 0x09: // INTSR
+                    if (data & (1 << 0)) INTSR &= ~(1 << 4); // Reset Key Wakeup Interrupt Flag
+                    if (data & (1 << 2)) INTSR &= ~(1 << 6); // Reset IRQ2 flag
+                    if (data & (1 << 3)) INTSR &= ~(1 << 7); // Reset IRQ1 flag
                     return;
                 case 0x0a:
                     SPCR1 = data;
@@ -148,7 +165,7 @@ void mc68hc05::write8(uint16_t address, uint8_t data) {
             case 0x1e:
                 OC2 = data;
                 return;
-            case 0x1f:
+            case 0x1f: // TCNT2
                 OC2 = 1;
                 return;
             case 0x20:
@@ -226,7 +243,8 @@ bool mc68hc05::step() {
 
             // Branch
         case 2: { // Branch
-            int8_t dst = read8(PC++);
+            int8_t rel = read8(PC++);
+            uint16_t dst = PC + rel;
             if (op_branch(lo, dst)) return true;
             HALT("Branch");
         }
@@ -269,11 +287,12 @@ bool mc68hc05::step() {
             ADDR("#$%02x", read8(vaddr));
 
             if (opcode == 0xad) {// CALL/BSR
-                int8_t dst = vaddr;
+                int8_t rel = read8(vaddr);
+                uint16_t dst = PC + rel;
 
-                TRACE_RAW("BSR %d", dst);
+                TRACE_RAW("BSR $%04x", dst);
                 push16(PC);
-                PC += dst;
+                PC = dst;
 
                 return true;
             }
@@ -329,14 +348,14 @@ bool mc68hc05::step() {
 
 void mc68hc05::op_bitset(uint8_t addr, uint8_t bit) {
     TRACE_RAW("BSET $%02x.%d", addr, bit);
-    uint8_t value = read8(addr);
+    uint8_t value = read8(addr, true);
     value |= 1 << bit;
     write8(addr, value);
 }
 
 void mc68hc05::op_bitclr(uint8_t addr, uint8_t bit) {
     TRACE_RAW("BCLR $%02x.%d", addr, bit);
-    uint8_t value = read8(addr);
+    uint8_t value = read8(addr, true);
     value &= ~(1 << bit);
     write8(addr, value);
 }
@@ -359,40 +378,46 @@ void mc68hc05::op_brbitclr(uint8_t addr, uint8_t bit, int8_t dst) {
 }
 
 
-bool mc68hc05::op_branch(uint8_t op, int8_t dst) {
+bool mc68hc05::op_branch(uint8_t op, uint16_t dst) {
     switch (op) {
         case 0x0:
-            TRACE_RAW("BRA %d", dst);
-            PC += dst;
+            TRACE_RAW("BRA $%04x", dst);
+            PC = dst;
             return true;
         case 0x4:
-            TRACE_RAW("BCC %d", dst);
+            TRACE_RAW("BCC $%04x", dst);
             if (!CCR.carry) {
-                PC += dst;
+                PC = dst;
             }
             return true;
         case 0x5:
-            TRACE_RAW("BCS %d", dst);
+            TRACE_RAW("BCS $%04x", dst);
             if (CCR.carry) {
-                PC += dst;
+                PC = dst;
             }
             return true;
         case 0x6:
-            TRACE_RAW("BNE %d", dst);
+            TRACE_RAW("BNE $%04x", dst);
             if (!CCR.zero) {
-                PC += dst;
+                PC = dst;
             }
             return true;
         case 0x7:
-            TRACE_RAW("BEQ %d", dst);
+            TRACE_RAW("BEQ $%04x", dst);
             if (CCR.zero) {
-                PC += dst;
+                PC = dst;
+            }
+            return true;
+        case 0xa:
+            TRACE_RAW("BPL $%04x", dst);
+            if (!CCR.negative) {
+                PC = dst;
             }
             return true;
         case 0xb:
-            TRACE_RAW("BMI %d", dst); // TODO: Use hex with sign
+            TRACE_RAW("BMI $%04x", dst);
             if (CCR.negative) {
-                PC += dst;
+                PC = dst;
             }
             return true;
     }
@@ -401,6 +426,54 @@ bool mc68hc05::op_branch(uint8_t op, int8_t dst) {
 
 bool mc68hc05::op_rmw(uint8_t op) {
     switch (op) {
+        case 0x4: {
+            TRACE("LSR");
+            uint8_t value = readv();
+            bool lsb = (value & 1) != 0;
+            value >>= 1;
+            writev(value);
+
+            CCR.carry = lsb;
+            CCR.negative = (value & 0x80) != 0;
+            CCR.zero = value == 0;
+            return true;
+        }
+        case 0x6: {
+            TRACE("ROR");
+            uint8_t value = readv();
+            bool lsb = (value & 1) != 0;
+            value = (CCR.carry << 7) | (value >> 1);
+            writev(value);
+
+            CCR.carry = lsb;
+            CCR.negative = (value & 0x80) != 0;
+            CCR.zero = value == 0;
+            return true;
+        }
+        case 0x8: {
+            TRACE("LSL");
+            uint8_t value = readv();
+            bool msb = (value & 0x80) != 0;
+            value <<= 1;
+            writev(value);
+
+            CCR.carry = msb;
+            CCR.negative = (value & 0x80) != 0;
+            CCR.zero = value == 0;
+            return true;
+        }
+        case 0x9: {
+            TRACE("ROL");
+            uint8_t value = readv();
+            bool msb = (value & 0x80) != 0;
+            value = (value << 1) | (CCR.carry << 0);
+            writev(value);
+
+            CCR.carry = msb;
+            CCR.negative = (value & 0x80) != 0;
+            CCR.zero = value == 0;
+            return true;
+        }
         case 0xa: {
             TRACE("DEC");
             uint8_t value = readv() - 1;
@@ -442,6 +515,10 @@ bool mc68hc05::op_control(uint8_t opcode) {
             TRACE("RTS");
             PC = pop16();
             return true;
+        case 0x98:
+            TRACE("CLC");
+            CCR.carry = 0;
+            return true;
         case 0x99:
             TRACE("SEC");
             CCR.carry = 1;
@@ -457,6 +534,7 @@ bool mc68hc05::op_control(uint8_t opcode) {
         case 0x9c:
             TRACE("RSP");
             SP = 0x00ff;
+            return true;
         case 0x9d:
             TRACE("NOP");
             return true;
@@ -490,6 +568,15 @@ bool mc68hc05::op_memory(uint8_t op) {
             CCR.carry = value < 0;
             return true;
         }
+
+        case 0x4:
+            TRACE("AND");
+            A &= readv();
+
+            CCR.negative = (A & 0x80) != 0;
+            CCR.zero = A == 0;
+            return true;
+
         case 0x6:
             TRACE("LDA");
             A = readv();
@@ -512,6 +599,16 @@ bool mc68hc05::op_memory(uint8_t op) {
 
             CCR.negative = (A & 0x80) != 0;
             CCR.zero = A == 0;
+            return true;
+
+        case 0x9:
+            TRACE("ADC");
+            A += readv() + CCR.carry;
+
+            // TODO: Calculate half carry!
+            CCR.negative = (A & 0x80) != 0;
+            CCR.zero = A == 0;
+            // TODO: Calculate carry!
             return true;
 
         case 0xa:
@@ -588,6 +685,176 @@ void mc68hc05::irq(uint16_t vector) {
     push8(CCR.reg);
     CCR.interrupt_mask = 1;
     PC = read16(vector);
+}
+
+void mc68hc05::onPortRead(int port) {
+    char P = 'A' + port;
+    if (P == 'D') { // PORTD write only, ignore reads
+    } else if (P == 'E') { // PORTE write only, ignore reads
+    } else {
+        printf("PORT%c read\n", 'A' + port);
+    }
+
+    // PORTB - checks bit7 (CXD2510Q.SENS)
+}
+
+std::string toBin(uint64_t n, size_t length) {
+    std::string output;
+    int group = 0;
+    for (int i = length - 1; i >= 0; i--) {
+        bool bit = n & (1 << i);
+
+        output += bit ? '1' : '0';
+        if ((i % 4) == 0) output += ' ';
+
+        group++;
+    }
+    return output;
+}
+
+
+int CXD2510Q_length = 0;
+bool CXD2510Q_prevCLOK = 1;
+bool CXD2510Q_prevXLAT = 1;
+uint64_t CXD2510Q_reg = 0;
+
+uint8_t CXD1815Q_index = 0;
+uint8_t CXD1815Q_data = 0;
+bool CXD1815Q_prevCS = 0;
+bool CXD1815Q_prevWR = 0;
+bool CXD1815Q_prevRD = 0;
+
+const char *CXD1815Q_REGS_W[0x20] = {
+        "DRVIF",    // 0x00 - drive interface
+        "CONFIG1",  // 0x01 - configuration 1
+        "CONFIG2",  // 0x02 - configuration 2
+        "DECCTL",   // 0x03 - decoder control
+        "DLADR-L",  // 0x04
+        "DLADR-M",  // 0x05
+        "DLADR-H",  // 0x06
+        "CHPCTL",   // 0x07 - chip control
+        "",         // 0x08
+        "INTMSK",   // 0x09 - interrupt mask
+        "CLRCTL",   // 0x0A - clear control
+        "CLRINT",   // 0x0B - clear interrupt status
+        "HXRF-L",   // 0x0C - host transfer-low
+        "HXRF-H",   // 0x0D - host transfer-high
+        "HADR-L",   // 0x0E - host address-low
+        "HADR-M",   // 0x0F - host address-middle
+        "DADRC-L",  // 0x10
+        "DADRC-M",  // 0x11
+        "DADRC-H",  // 0x12
+        "",         // 0x13
+        "",         // 0x14
+        "",         // 0x15
+        "HIFCTL",   // 0x16 - host interface control
+        "RESULT",   // 0x17
+        "",         // 0x18
+        "ADPMNT",   // 0x19
+        "",         // 0x1A
+        "RTCI",     // 0x1B - real-time coding information
+
+        // Absent from docs
+        "???",      // 0x1C
+        "???",      // 0x1D
+        "???",      // 0x1E
+        "???",      // 0x1F
+};
+
+const char *CXD1815Q_REGS_R[0x20] = {
+        "ECCSTS",  // 0x00 - ECC status
+        "DECSTS",  // 0x01 - decoder status
+        "HDRFLG",  // 0x02 - header flag
+        "HDR",     // 0x03 - header
+        "SHDR",    // 0x04 - sub header
+        "CMADR",   // 0x05 - current minute address
+        "???",     // 0x06 Absent
+        "INTSTS",  // 0x07 - interrupt status
+        "ADPCI",   // 0x08 - ADPCM coding information
+        "",        // 0x09
+        "HXFRC-L", // 0x0A - host transfer counter-low
+        "HXFRC-H", // 0x0B - host transfer counter-high
+        "HADRC-L", // 0x0C - host address counter-low
+        "HADRC-M", // 0x0D - host address counter-middle
+        "DADRC-L", // 0x0E - drive address counter-low
+        "DADRC-M", // 0x0F - drive address counter-middle
+        "",        // 0x10
+        "HIFSTS",  // 0x11 - host interface status
+        "HSTPRM",  // 0x12 - host parameter
+        "HSTCMD",  // 0x13 - host command
+
+        // Absent from docs
+        "???",     // 0x14
+        "???",     // 0x15
+        "???",     // 0x16
+        "???",     // 0x17
+        "???",     // 0x18
+        "???",     // 0x19
+        "???",     // 0x1A
+        "???",     // 0x1B
+        "???",     // 0x1C
+        "???",     // 0x1D
+        "???",     // 0x1E
+        "???",     // 0x1F
+};
+
+void mc68hc05::onPortWrite(int port, uint8_t data) {
+    char P = 'A' + port;
+    if (P == 'D') { // PORTD
+        bool DATA = (data & (1 << 1)) != 0;
+        bool XLAT = (data & (1 << 2)) != 0;
+        bool CLOK = (data & (1 << 3)) != 0;
+//        printf("CXD2510Q DATA: %d, XLAT: %d CLK: %d\n", DATA, XLAT, CLOK);
+
+
+        if (CXD2510Q_prevCLOK == 0 && CLOK == 1) {
+            CXD2510Q_reg <<= 1;
+            CXD2510Q_reg |= DATA;
+            CXD2510Q_length++;
+        }
+        CXD2510Q_prevCLOK = CLOK;
+
+        if (CXD2510Q_prevXLAT == 1 && XLAT == 0) {
+            printf("W CXD2510Q WRITE(%2d): 0x-%8llx %32s\n", CXD2510Q_length, CXD2510Q_reg,
+                   toBin(CXD2510Q_reg, CXD2510Q_length).c_str());
+            CXD2510Q_reg = 0;
+            CXD2510Q_length = 0;
+        }
+        CXD2510Q_prevXLAT = XLAT;
+
+        // CXD1815Q CS, WR, RD
+        {
+            bool CS = (data & (1 << 4)) != 0;
+            bool WR = (data & (1 << 5)) != 0;
+            bool RD = (data & (1 << 6)) != 0;
+            // bit 7 - LD ON
+
+            if (CS != CXD1815Q_prevCS || WR != CXD1815Q_prevWR || RD != CXD1815Q_prevRD) {
+                if (!CS) { // Active low
+                    if (!WR) {
+                        printf("W CXD1815Q.%02x %-8s = 0x%02x\n", CXD1815Q_index, CXD1815Q_REGS_W[CXD1815Q_index],
+                               CXD1815Q_data);
+                    }
+                    if (!RD) {
+                        printf("R CXD1815Q.%02x %-8s = ??\n", CXD1815Q_index, CXD1815Q_REGS_R[CXD1815Q_index]);
+                    }
+                }
+//                printf("W CXD1815Q CS:%d, WR:%d, RD:%d\n", CS, WR, RD);
+            }
+
+            CXD1815Q_prevCS = CS;
+            CXD1815Q_prevWR = WR;
+            CXD1815Q_prevRD = RD;
+        }
+    } else if (P == 'A') {
+//        printf("W CXD1815Q.DATA:  0x%02x\n", data);
+        CXD1815Q_data = data;
+    } else if (P == 'E') {
+//        printf("W CXD1815Q.INDEX: 0x%02x\n", data & 0x1f);
+        CXD1815Q_index = data & 0x1f;
+    } else {
+        printf("PORT%c write: 0x%02x\n", 'A' + port, data);
+    }
 }
 
 
