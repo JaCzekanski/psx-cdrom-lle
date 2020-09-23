@@ -426,6 +426,16 @@ bool mc68hc05::op_branch(uint8_t op, uint16_t dst) {
 
 bool mc68hc05::op_rmw(uint8_t op) {
     switch (op) {
+        case 0x2: {
+            TRACE("MUL");
+            uint16_t result = X * A;
+            X = (result >> 8) & 0xff;
+            A = result & 0xff;
+
+            CCR.half_carry = 0;
+            CCR.carry = 0;
+            return true;
+        }
         case 0x4: {
             TRACE("LSR");
             uint8_t value = readv();
@@ -514,6 +524,10 @@ bool mc68hc05::op_control(uint8_t opcode) {
         case 0x81:
             TRACE("RTS");
             PC = pop16();
+            return true;
+        case 0x97:
+            TRACE("TAX");
+            X = A;
             return true;
         case 0x98:
             TRACE("CLC");
@@ -687,17 +701,6 @@ void mc68hc05::irq(uint16_t vector) {
     PC = read16(vector);
 }
 
-void mc68hc05::onPortRead(int port) {
-    char P = 'A' + port;
-    if (P == 'D') { // PORTD write only, ignore reads
-    } else if (P == 'E') { // PORTE write only, ignore reads
-    } else {
-        printf("PORT%c read\n", 'A' + port);
-    }
-
-    // PORTB - checks bit7 (CXD2510Q.SENS)
-}
-
 std::string toBin(uint64_t n, size_t length) {
     std::string output;
     int group = 0;
@@ -718,11 +721,43 @@ bool CXD2510Q_prevCLOK = 1;
 bool CXD2510Q_prevXLAT = 1;
 uint64_t CXD2510Q_reg = 0;
 
+uint8_t CXD1815Q_readdata = 0;
 uint8_t CXD1815Q_index = 0;
 uint8_t CXD1815Q_data = 0;
 bool CXD1815Q_prevCS = 0;
 bool CXD1815Q_prevWR = 0;
 bool CXD1815Q_prevRD = 0;
+
+bool prevLDON = 0;
+
+// PORTB
+bool DOOR_OPEN = 0;
+bool CXD2510Q_sens = 1;
+int CXD2510Q_sens_cnt = 0;
+
+void mc68hc05::onPortRead(int port) {
+    char P = 'A' + port;
+    if (P == 'A') { // PORTA - CXD1815Q.Data
+        PORTA = CXD1815Q_readdata;
+    } else if (P == 'B') { // PORTB - all input
+        PORTB = 0;
+
+        CXD2510Q_sens_cnt++;
+        CXD2510Q_sens = CXD2510Q_sens_cnt % 64 == 0;
+
+        PORTB |= (DOOR_OPEN << 3);
+        PORTB |= (CXD2510Q_sens<<7);
+//        CXD2510Q_sens = !CXD2510Q_sens;
+
+        printf("PORT%c read <- 0x%02x\n", 'A' + port, PORTB);
+    } else if (P == 'D') { // PORTD write only, ignore reads
+    } else if (P == 'E') { // PORTE write only, ignore reads
+    } else {
+        printf("PORT%c read\n", 'A' + port);
+    }
+
+    // PORTB - checks bit7 (CXD2510Q.SENS)
+}
 
 const char *CXD1815Q_REGS_W[0x20] = {
         "DRVIF",    // 0x00 - drive interface
@@ -798,36 +833,61 @@ const char *CXD1815Q_REGS_R[0x20] = {
         "???",     // 0x1F
 };
 
+uint8_t swapBits(uint8_t i) {
+    uint8_t o = 0;
+
+    const int BITS = 3;
+    for (int b = 0; b<=BITS; b++) {
+        bool bit = (i & (1 << b)) != 0;
+
+        o |= bit << (BITS-b);
+    }
+    return o;
+}
 void mc68hc05::onPortWrite(int port, uint8_t data) {
     char P = 'A' + port;
     if (P == 'D') { // PORTD
-        bool DATA = (data & (1 << 1)) != 0;
-        bool XLAT = (data & (1 << 2)) != 0;
-        bool CLOK = (data & (1 << 3)) != 0;
-//        printf("CXD2510Q DATA: %d, XLAT: %d CLK: %d\n", DATA, XLAT, CLOK);
+        // bit0 - always 1
 
+        // CXD2510Q DATA, XLAT, CLOK
+        {
+            bool DATA = (data & (1 << 1)) != 0;
+            bool XLAT = (data & (1 << 2)) != 0;
+            bool CLOK = (data & (1 << 3)) != 0;
 
-        if (CXD2510Q_prevCLOK == 0 && CLOK == 1) {
-            CXD2510Q_reg <<= 1;
-            CXD2510Q_reg |= DATA;
-            CXD2510Q_length++;
+            if (CXD2510Q_prevCLOK == 0 && CLOK == 1) {
+                CXD2510Q_reg <<= 1;
+                CXD2510Q_reg |= DATA;
+                CXD2510Q_length++;
+            }
+            CXD2510Q_prevCLOK = CLOK;
+
+            if (CXD2510Q_prevXLAT == 1 && XLAT == 0) {
+                uint8_t cxd_data[4];
+                uint8_t cxd_address = swapBits(CXD2510Q_reg & 0xf);
+                for (int i = 1; i< CXD2510Q_length / 4; i++) {
+                    cxd_data[i-1] = swapBits((CXD2510Q_reg >> i*4) & 0xf);
+                }
+
+                printf("W CXD2510Q addr: 0x%x data: ", cxd_address);
+                for (int i = 1; i< CXD2510Q_length / 4; i++) {
+                    printf("0x%x ", cxd_data[i-1]);
+                }
+//                printf("%32s", toBin(CXD2510Q_reg, CXD2510Q_length).c_str());
+//                printf("W CXD2510Q WRITE(%2d): 0x%0*llx %32s\n", CXD2510Q_length, CXD2510Q_length/4, CXD2510Q_reg,
+//                       toBin(CXD2510Q_reg, CXD2510Q_length).c_str());
+                printf("\n");
+                CXD2510Q_reg = 0;
+                CXD2510Q_length = 0;
+            }
+            CXD2510Q_prevXLAT = XLAT;
         }
-        CXD2510Q_prevCLOK = CLOK;
-
-        if (CXD2510Q_prevXLAT == 1 && XLAT == 0) {
-            printf("W CXD2510Q WRITE(%2d): 0x-%8llx %32s\n", CXD2510Q_length, CXD2510Q_reg,
-                   toBin(CXD2510Q_reg, CXD2510Q_length).c_str());
-            CXD2510Q_reg = 0;
-            CXD2510Q_length = 0;
-        }
-        CXD2510Q_prevXLAT = XLAT;
 
         // CXD1815Q CS, WR, RD
         {
             bool CS = (data & (1 << 4)) != 0;
             bool WR = (data & (1 << 5)) != 0;
             bool RD = (data & (1 << 6)) != 0;
-            // bit 7 - LD ON
 
             if (CS != CXD1815Q_prevCS || WR != CXD1815Q_prevWR || RD != CXD1815Q_prevRD) {
                 if (!CS) { // Active low
@@ -839,12 +899,19 @@ void mc68hc05::onPortWrite(int port, uint8_t data) {
                         printf("R CXD1815Q.%02x %-8s = ??\n", CXD1815Q_index, CXD1815Q_REGS_R[CXD1815Q_index]);
                     }
                 }
-//                printf("W CXD1815Q CS:%d, WR:%d, RD:%d\n", CS, WR, RD);
             }
 
             CXD1815Q_prevCS = CS;
             CXD1815Q_prevWR = WR;
             CXD1815Q_prevRD = RD;
+        }
+
+        {
+            bool LDON = (data & (1 << 7)) != 0;
+            if (LDON != prevLDON) {
+                printf("LDON: %d\n", LDON);
+                prevLDON = LDON;
+            }
         }
     } else if (P == 'A') {
 //        printf("W CXD1815Q.DATA:  0x%02x\n", data);

@@ -8,6 +8,26 @@ uint8_t toHex(char c) {
     else return 0;
 }
 
+bool loadBin(const char *path, mc68hc05 *cpu) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+
+    fseek(f, 0, SEEK_END);
+    size_t size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (size != mc68hc05::ROM_SIZE + mc68hc05::BOOTSRAP_SIZE) {
+        fprintf(stderr, ".bin file must be %d in size.", mc68hc05::ROM_SIZE + mc68hc05::BOOTSRAP_SIZE);
+        fclose(f);
+        return false;
+    }
+
+    fread(cpu->rom, mc68hc05::ROM_SIZE, 1, f);
+    fread(cpu->bootstrap, mc68hc05::BOOTSRAP_SIZE, 1, f);
+    fclose(f);
+
+    return true;
+}
 bool loadSrec(const char *path, mc68hc05 *cpu) {
     char buffer[256];
     int ptr = 0;
