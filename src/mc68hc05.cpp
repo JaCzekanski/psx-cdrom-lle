@@ -6,7 +6,7 @@ uint8_t mc68hc05::read8(uint16_t address, bool peek) {
     if (address >= ROM_BASE && address < ROM_BASE + ROM_SIZE) return rom[address - ROM_BASE];
     else if (address >= BOOTSRAP_BASE && address <= BOOTSRAP_BASE + BOOTSRAP_SIZE - 1)
         return bootstrap[address - BOOTSRAP_BASE];
-    else if (address >= RAM_BASE && address < RAM_BASE + ROM_SIZE) return ram[address - RAM_BASE];
+    else if (address >= RAM_BASE && address < RAM_BASE + RAM_SIZE) return ram[address - RAM_BASE];
 
     if (address < 0x10) {
         if (log_io && !peek) printf("mc68hc05: read  @ %d:0x%02x\n", MISC & 1, address);
@@ -739,23 +739,21 @@ void mc68hc05::onPortRead(int port) {
     char P = 'A' + port;
     if (P == 'A') { // PORTA - CXD1815Q.Data
         PORTA = CXD1815Q_readdata;
+        return;
     } else if (P == 'B') { // PORTB - all input
         PORTB = 0;
 
-        CXD2510Q_sens_cnt++;
-        CXD2510Q_sens = CXD2510Q_sens_cnt % 64 == 0;
-
         PORTB |= (DOOR_OPEN << 3);
         PORTB |= (CXD2510Q_sens<<7);
-//        CXD2510Q_sens = !CXD2510Q_sens;
+        CXD2510Q_sens = !CXD2510Q_sens;
 
         printf("PORT%c read <- 0x%02x\n", 'A' + port, PORTB);
-    } else if (P == 'D') { // PORTD write only, ignore reads
-    } else if (P == 'E') { // PORTE write only, ignore reads
-    } else {
-        printf("PORT%c read\n", 'A' + port);
+        return;
+    } else if (P == 'E') { // PORTE - Index, all output
+
     }
 
+    printf("PORT%c read\n", 'A' + port);
     // PORTB - checks bit7 (CXD2510Q.SENS)
 }
 
@@ -859,6 +857,7 @@ void mc68hc05::onPortWrite(int port, uint8_t data) {
                 CXD2510Q_reg <<= 1;
                 CXD2510Q_reg |= DATA;
                 CXD2510Q_length++;
+                if (CXD2510Q_length > 32) CXD2510Q_length = 32;
             }
             CXD2510Q_prevCLOK = CLOK;
 

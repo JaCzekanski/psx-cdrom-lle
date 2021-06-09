@@ -82,7 +82,7 @@ struct mc68hc05 {
     uint64_t ticks = 0;
 
     bool log_io = false;
-    bool trace = true;
+    bool trace = false;
 
     // Debug
     char __ADDR[64] = {0};

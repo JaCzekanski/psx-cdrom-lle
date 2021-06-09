@@ -149,7 +149,7 @@ void dumpIo(mc68hc05 *cpu) {
 }
 
 int main() {
-    const char *romPath = "/Users/jakub/Desktop/SC430930/SC430930.S19";
+    const char *romPath = "mechacon/SCPH-5501/SC430930/SC430930.S19";
 
     mc68hc05 subcpu;
     if (!loadSrec(romPath, &subcpu)) {
@@ -168,7 +168,7 @@ int main() {
 
         // Main loop is waiting for 64 timer2 IRQs
         // $4b.7 - Timer2 IRQ
-        if (i > 2000 && (i % 50) == 0) {
+        if ((i % 2000) == 0 && (subcpu.TCR2 & (1<<6))) {
 //            FFF2h  6    SSPI Vector (SPI bus)     (SPI1 and SPI2)
 //            FFF4h  5    Timer 2 Interrupt Vector  (Timer 2 Input/Compare)
 //            FFF6h  4    Timer 1 Interrupt Vector  (Timer 1 Input/Compare/Overflow)
@@ -184,7 +184,10 @@ int main() {
             // 0xfffa - External interrupt /IRQ1 /IRQ2 - unused
             // 0xfffc - SWI - unused
 
-            subcpu.irq(0xfff4);
+            subcpu.TSR2 |= (1<<6);
+            if (!subcpu.CCR.interrupt_mask) {
+                subcpu.irq(0xfff4);
+            }
 //            printf("IRQ 0x%04x\n", 0xfff4);
         }
     }
